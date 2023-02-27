@@ -1,0 +1,73 @@
+import openai
+import logging
+from tqdm import tqdm
+from aiogram import Bot, types
+from aiogram.dispatcher import Dispatcher
+from aiogram.utils import executor
+from aiogram.utils.markdown import bold
+from aiogram import Bot, Dispatcher, types
+from aiogram.dispatcher.filters import Command
+from aiogram.types import ParseMode
+
+
+
+logging.basicConfig(level=logging.INFO)
+
+token = ''
+
+openai.api_key = ''
+
+
+bot = Bot(token)
+dp = Dispatcher(bot)
+
+help_message = "Используйте нейросеть только для предназначенных задач: Нейросети могут быть очень мощными и эффективными инструментами, но они должны использоваться только для решения конкретных задач, для которых они были разработаны. Не пытайтесь использовать нейросеть для решения задач, для которых она не была предназначена."
+
+
+# обработка команды /start
+@dp.message_handler(commands=['start'])
+async def send_welcome(message: types.Message):
+    await bot.send_message(
+        message.chat.id,
+        text=('Привет! Я нейросеть, а таже хороший собеседник, пожалуйста прочите рекомендации по использованию меня введя команду /help.'),
+        parse_mode=types.ParseMode.MARKDOWN
+    )
+
+
+
+@dp.message_handler()
+async def send(message : types.Message):
+    # получаем имя пользователя
+    username = message.from_user.username
+    # или полное имя, если имя пользователя не задано
+    if not username:
+        username = message.from_user.full_name
+    # отправляем ответ с именем пользователя
+    if message.text == '/help' or message.text == '/help@ChatGPTfed_bot':
+        await message.answer(help_message)
+    else:
+        msg = await message.answer(f"Запрос принят, {username}!")
+        print('')
+        print('Запрос от пользователя')
+        print('Пользователь',username,':', message.text)
+        await bot.send_chat_action(message.chat.id, 'typing')
+
+
+        response = openai.Completion.create(
+            model="text-davinci-003",
+            prompt=message.text,
+            temperature=0.6,
+            max_tokens=1000,
+            top_p=1,
+            frequency_penalty=0.2,
+            presence_penalty=0.3,
+            stop=["You:"],
+            logprobs=10
+        )
+
+        await msg.delete()
+        await message.answer(response['choices'][0]['text'])
+        print('AI', response['choices'][0]['text'])
+
+
+executor.start_polling(dp, skip_updates=True)
