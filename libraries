@@ -1,0 +1,5 @@
+List of libraries and how to install them:
+
+OpenAI (pip install openai)
+Aiogram (pip install aiogram)
+Logging
