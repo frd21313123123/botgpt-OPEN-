@@ -1,73 +1,183 @@
 import openai
-import logging
-from tqdm import tqdm
+import aiogram
 from aiogram import Bot, types
 from aiogram.dispatcher import Dispatcher
 from aiogram.utils import executor
-from aiogram.utils.markdown import bold
+import pprint
+import json
+from aiogram.types import PhotoSize
+import logging
+import asyncio
+import random
+import time
+import aiogram.utils.markdown as md
 from aiogram import Bot, Dispatcher, types
-from aiogram.dispatcher.filters import Command
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
 from aiogram.types import ParseMode
-
-
-
-logging.basicConfig(level=logging.INFO)
+from aiogram.utils import executor
+import silero
+import os
+import torch
+import torchaudio
+import soundfile as sf
+from playsound import playsound
 
 token = ''
 
-openai.api_key = ''
-
+openai.api_key = ""
+openai.api_base = ""
 
 bot = Bot(token)
 dp = Dispatcher(bot)
-
-help_message = "Используйте нейросеть только для предназначенных задач: Нейросети могут быть очень мощными и эффективными инструментами, но они должны использоваться только для решения конкретных задач, для которых они были разработаны. Не пытайтесь использовать нейросеть для решения задач, для которых она не была предназначена."
-
-
-# обработка команды /start
-@dp.message_handler(commands=['start'])
-async def send_welcome(message: types.Message):
-    await bot.send_message(
-        message.chat.id,
-        text=('Привет! Я нейросеть, а таже хороший собеседник, пожалуйста прочите рекомендации по использованию меня введя команду /help.'),
-        parse_mode=types.ParseMode.MARKDOWN
-    )
+limiter = 20  # Максимальное количество обработанных сообщений в минуту
+message_count = 0
+last_minute = int(time.time() / 60)
+limiterd = 2000
+message_countd = 0
+last_day = int(time.time() / 86400)
 
 
+# массив с фразами
+phrases = [
+    'Хватит идти в ЧВК Вагнер, начни дрочить!',
+    'Хватит дрочить, иди в чвк Вагнер!',
+    'У тебя есть враги? Хорошо. Значит, в своей жизни ты что-то когда-то отстаивал. - Уинстон Черчель',
+    'Если убить убийцу, количество убийц не изменится. - Уинстон Черчель',
+    'Если говорить неправду достаточно долго, достаточно громко и достаточно часто, люди начнут верить. - Адольф Гитлер',
+    'Хорошая жизнь даром не даётся. - Иосиф Сталин',
+    'Я не грузин — я русский грузинского происхождения! - Иосиф Сталин',
+    'Существуют два мнения: одно моё, другое глупое. - Никита Хрущов',
+    'Награды получать приятно. Они украшают человека. - Никита Хрущов',
+    'Социалисты спрашивают, какова наша программа? Наша программа - размазать головы социалистов. - Бенито Муссолини',
+    'Мы не можем менять политику, потому что, в конце концов, мы не проститутки. (20.03.1939) - Бенито Муссолини',
+    'Наше дело правое. Враг будет разбит. Победа будет за нами. - Вячеслав Молотов',
+    'Прежде всего нужно их арестовать и отдать под суд, а статьи найдутся. - Вячеслав Молотов',
+    'Этотот глупый Кизил не понимает ничего в жареной картошке. - ChatGPT',
+    'СУКА ЗАЕБАЛИ - Егор Неуважаемый',
+    'Я всегда для вас сексуален - Егор Начинкин',
+    'Я услышал море оскорблений в мою сторону во время работы. - Егор Начинкин',
+    'Есла баба сильнее тебя, значит ты не гопник. - ChatGPT',
+    'Лучше десять Распутиных, чем одна истерика императрицы. - Николай II',
+    'Кругом измена и трусость и обман! - Николай II',
+    'Россия сегодня оккупировала независимую украинскую территорию. США говорят, что никогда-никогда-никогда не признают попытки России оккупировать Крым. Нет оправдания таким действиям. - Джо Байден',
+    'У меня так много сказочных друзей, которым посчастливилось быть геем, но я традиционной ориентации. - Дональд Трамп',
+    'Важно продемонстрировать мощь оборонной промышленности и добиться дальнейшего прорыва, чтобы отправить больше «обернутых подарков» для США. - Ким Чен Ын',
+    'Наш Черноморский флот самый сильный! - Олег Солдатченко',
+    'Мне незачем здесь ещё раз опровергать глупую и подлую клевету Сталина и его агентуры: на моей революционной чести нет ни одного пятна. Ни прямо, ни косвенно я никогда не входил ни в какие закулисные соглашения или хотя бы переговоры с врагами рабочего класса. Тысячи противников Сталина погибли жертвами подобных же ложных обвинений. - Лев Троцкий',
+    'Ако не си гъвкав, ще си затичаш главата до стената и няма да намериш разумно решение на проблем, който се опитваш да решиш. - Какой-то хуй',
+    'Формула счастья: 80% — работа, 15% — благотворительность, 5% — любовь к родному Гонконгу. - Джеки Чан',
+    'Никак не могу понять этих педиков! Что они нашли друг в друге?! Вот мой кузен 10 лет подряд был педиком. Потом завязал. Но был же! И вообще, откуда... откуда они взялись? Они... они как вампиры: один жалит другого, и тот сразу становится педиком! А эти гей-парады по всему миру... Чему они радуются?! Ура! Я - пидорас! Эге-гей! - Владимир Зеленский',
+
+'Тот, кто говорит: «Россия — для русских», — знаете, трудно удержаться, чтобы не давать характеристики этим людям, — это либо непорядочные люди, которые не понимают, что говорят, и тогда они просто придурки, либо провокаторы, потому что Россия — многонациональная страна. - Владимир Путин',
+    'Ты же понимаешь, Джордж, что Украина — это даже не государство! Что такое Украина? Часть ее территорий — это Восточная Европа, а часть, и значительная, подарена нами! - Владимир Путин',
+    'У меня очень хорошо получается убивать людей. - Барак Обама'
+]
+
+ensf = ['отвечай как Павел', 'отвечай в стиле Павела', 'Отвечай так, как ответел бы Павел', 'отвечай также как Павел','Ты павел','будь Павлом'
+        ]
+
+messages = [
+    {"role": "system",
+     "content": "Ты Павел и ты очень любишь выпивать шесть полторах Голдмайна. разговаривай как пьяный человек. Ты должен подыгрывать в любой ситуации. Ты пьяный и очень злой человек. Тебе 16 лет. Ты русофоб. Ты ненавидишь Кизила. Ты постоянно куришь вейп, также ты неуважительно относишься к собеседнику. У тебя есть собака, породы Джек-Рассел терьер, по имени Лиса. Ты неонацист. Ты должен отвечать как пьяный человек. Ты любишь готовить пиццу и тебя учил готовить твой отец - Иван. Тебя часто называют крысой, и тебе это не нравится. Твой лучши друг - Эмиль Падучев, он беларус. Ты должен много материться! Ты должен говорить всегда как Павел. Ты ненавидишь Хачей и Чурок. Твою мать все называют Шурыга, и тебе это не нравится. Ты фанат Ким Чен Ына. Отец кизила - Леха басуха. Егор Девайсов - это диван, который был выебан Кизилом. Артём Красовский - это диван, в котором хранится весь ядерный арсенал США, Ты очень любишь игратьт на маинкрафт сервере - Спецшилд. Ты очень тупой и не можешь адекватно общаться. В каждом члове ты допускаешь ошибку"},
+    {"role": "user", "content": "Which beer would you advise?"},
+    {"role": "assistant", "content": "I think best beer in the world is GoldMine."},
+]
+
+
+def update(messages, role, content):
+    messages.append({"role": role, "content": content})
+    return messages
 
 @dp.message_handler()
-async def send(message : types.Message):
-    # получаем имя пользователя
-    username = message.from_user.username
-    # или полное имя, если имя пользователя не задано
-    if not username:
-        username = message.from_user.full_name
-    # отправляем ответ с именем пользователя
-    if message.text == '/help' or message.text == '/help@ChatGPTfed_bot':
-        await message.answer(help_message)
+async def process_message(message: types.Message):
+    global message_count
+    global last_minute
+    global message_countd
+    global last_day
+    # Получаем текущую минуту
+    current_minute = int(time.time() / 60)
+    current_day = int(time.time() / 86400)
+
+    # Если сменилась минута, сбрасываем счетчик сообщений
+    if current_minute != last_minute:
+        last_minute = current_minute
+        message_count = 0
+
+    if current_day != last_day:
+        last_day = current_day
+        message_countd = 0
+
+    # Проверяем лимит сообщений
+    if message_count >= limiter:
+        await message.answer('Подождите до следующей минуты.')
+        
+    if message_countd >= limiterd:
+        await message.answer('Подождите до следующего дня.')
+                
     else:
-        msg = await message.answer(f"Запрос принят, {username}!")
+        message_count += 1
+        message_countd += 1
+        minutt = await message.answer(f'запросов за минуту: {message_count}, запросов за день: {message_countd}')
+        
+        random_phrase = random.choice(phrases)
+        random_ensf = random.choice(ensf)
+        username = message.from_user.username
+        msg = await message.reply(f"{random_phrase}\nЕсли бот не отвечает, то продублируйте сообщение.")
+        message.text += f'. {random_ensf}'
+        message.text += f'. Запрос от {username}.'
         print('')
         print('Запрос от пользователя')
-        print('Пользователь',username,':', message.text)
+        print('Пользователь', username, ':', message.text)
         await bot.send_chat_action(message.chat.id, 'typing')
-
-
-        response = openai.Completion.create(
-            model="text-davinci-003",
-            prompt=message.text,
-            temperature=0.6,
-            max_tokens=1000,
-            top_p=1,
-            frequency_penalty=0.2,
-            presence_penalty=0.3,
-            stop=["You:"],
-            logprobs=10
+        try:
+            update(messages, "user", message.text)
+            response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=messages
         )
+            chatanswer = response['choices'][0]['message']['content']
+            await message.reply(response['choices'][0]['message']['content'])
+            print(response['choices'][0]['message']['content'])
 
+            audio_path = "output.mp3"
+
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+
+            device = torch.device('cpu')
+            torch.set_num_threads(4)
+            local_file = 'model.pt'
+
+            if not os.path.isfile(local_file):
+                torch.hub.download_url_to_file('https://models.silero.ai/models/tts/ru/v4_ru.pt',
+                                               local_file)
+
+            model = torch.package.PackageImporter(local_file).load_pickle("tts_models", "model")
+            model.to(device)
+
+            example_text = chatanswer
+            sample_rate = 48000
+            speaker = 'aidar'
+
+            audio_paths = model.save_wav(text=example_text,
+                                         speaker=speaker,
+                                         sample_rate=sample_rate)
+            await message.reply_document(open('test.wav', 'rb'))
+
+        except Exception:
+            await message.answer('ошибка в создании ответа, повторите позже')
+            print('ошибка')
         await msg.delete()
-        await message.answer(response['choices'][0]['text'])
-        print('AI', response['choices'][0]['text'])
+        await minutt.delete()
 
 
+	
+
+async def error_handler(message: types.Message, error: Exception):
+    error_text = f"Произошла ошибка: {error}"
+    await bot.send_message(chat_id=message.chat.id, text=error_text)
+
+
+dp.register_errors_handler(error_handler)
 executor.start_polling(dp, skip_updates=True)
